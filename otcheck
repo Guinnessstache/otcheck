@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# Settings
+MAXLOG=100
+MINETH=0.045
+MINTRAC=100
+OTNODE=otnode
+
+OTCHECKVER="1.0"
+BOLD="\e[1m"
+G="\e[32m"
+R="\e[31m"
+E="\e[0m"
+ERROR=0
+
+# Docker Container exists and is running?
+if [ "$(docker inspect -f '{{.State.Running}},{{.State.Paused}}' $OTNODE 2>/dev/null)" = "true,false" ]; then
+  DOCKERSTATUS="${G}$(docker container ls -q --filter=name=$OTNODE --format='{{json .Status}}'|jq -r ".") and running${E}"
+else
+  if [ "$?" = "0" ]; then
+    DOCKERSTATUS="${R}Not running!${E}"
+    ((ERROR++))
+  else
+    echo
+    echo -e "${R}Docker Container $OTNODE does not exist!${E}"
+    echo
+    exit 1
+  fi
+fi
+
+# Current OT Node Version?
+OTINFO=$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/info' 2>/dev/null)
+OTHOST=$(echo "$OTINFO"|jq -r ".network.contact.hostname")
+OTPORT=$(echo "$OTINFO"|jq -r ".network.contact.port")
+ERC725=$(echo "$OTINFO"|jq -r ".erc_725_identity")
+VERSION=$(echo "$OTINFO"|jq -r ".version")
+VERGITH=$(curl -s 'https://raw.githubusercontent.com/OriginTrail/ot-node/release/mariner/package.json'|jq -r ".version")
+if [ "$VERSION" = "$VERGITH" ]; then
+  VERSTATUS="${G}$VERSION${E} (same as on Github)"
+else
+  VERSTATUS="${R}$VERSION${E} (${G}$VERGITH${E} on Github)"
+  ((ERROR++))
+fi
+
+# Log File Size outside Docker
+LOGO=$(du -m "$(docker inspect -f '{{.LogPath}}' $OTNODE 2>/dev/null)" 2>/dev/null|awk '{print $1}')
+if (( $(echo "$LOGO < $MAXLOG" | bc -l) )); then
+  LOGOSTATUS="${G}$LOGO${E} (max. $MAXLOG)"
+else
+  LOGOSTATUS="${R}$LOGO${E} (max. $MAXLOG)"
+  ((ERROR++))
+fi
+
+# Log Files inside Docker
+LOGI=$(docker exec $OTNODE du -m /ot-node/logs|awk '{print $1}')
+if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
+  LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
+else
+  LOGISTATUS="${R}$LOGI${E} (max. $MAXLOG)"
+  ((ERROR++))
+fi
+clear
+echo
+echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : v.$OTCHECKVER by befranz.net"
+echo
+echo -e "Docker Container Status      : $DOCKERSTATUS"
+echo -e "OT Node Software Version     : $VERSTATUS"
+echo -e "LOG File outside Docker (MB) : $LOGOSTATUS"
+echo -e "LOG Files inside Docker (MB) : $LOGISTATUS"
+echo
+echo "---- Local Storage ----"
+df -h --output=size,used,avail,pcent /
+echo
+
+# RPC Link working?
+OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
+MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
+if [ "$MINSTAKE" = "1000" ]; then
+  RPC="${G}YES${E}"
+else
+  RPC="${R}NO${E}"
+  ((ERROR++))
+fi
+
+# Operational Wallet Balance
+OWB=$(echo "$OTB"|jq -r ".wallet.ethBalance")
+if (( $(echo "$OWB > $MINETH" | bc -l) )); then
+  OWB="${G}$OWB${E} (min. $MINETH)"
+else
+  OWB="${R}$OWB${E} (min. $MINETH)"
+  ((ERROR++))
+fi
+
+# TRAC reserved and available
+TRACR=$(echo "$OTB"|jq -r ".profile.reserved")
+TRACS=$(echo "$OTB"|jq -r ".profile.staked")
+TRACA=$((TRACS-TRACR-MINSTAKE))
+if (( $(echo "$TRACA > $MINTRAC" | bc -l) )); then
+  TRACA="${G}$TRACA${E} (min. $MINTRAC)"
+else
+  TRACA="${R}$TRACA${E}  (min. $MINTRAC)"
+  ((ERROR++))
+fi
+
+echo -e "RPC Server URL working       : $RPC"
+echo -e "Operational Wallet (ETH)     : $OWB"
+echo -e "TRAC reserved to Offers      : $TRACR"
+echo -e "TRAC available for Offers    : $TRACA"
+echo
+printf "Operating System Status      : "
+
+# Find upgradable components
+apt update -qqq
+APTUPG=$(apt list --upgradable -qq 2>/dev/null|wc -l)
+UPGDOCKER=$(apt list --upgradable -qq 2>/dev/null|grep -c -i "docker")
+
+# Check reboot file
+if [ -e /var/run/reboot-required.pkgs ]; then
+  REBOOT="(${R}after Reboot${E})"
+else
+  REBOOT=""
+fi
+
+# Show how many upgradable components and if Docker is part of
+if [ ! "$APTUPG" = "0" ]; then
+  echo -e "${R}$APTUPG Upgrade(s)${E} by ${BOLD}apt upgrade -y${E}"
+  echo
+  if [ ! "$UPGDOCKER" = "0" ]; then
+    echo -e "${R}Docker components are part of the upgrade.${E} To avoid issues"
+    echo -e "stop OT Node by ${BOLD}docker stop $OTNODE${E} before the upgrade."
+    echo
+  fi
+else
+  echo -e "${G}up-to-date${E} ${REBOOT}"
+  echo
+fi
+
+if [ $ERROR = 0 ]; then
+  echo -e "${G}Looks good, as final step call this in your web browser:${E}"
+  echo
+  echo -e "https://${OTHOST}:${OTPORT}"
+  echo
+  echo -e "If you get immediate answer, that the connection is not secure"
+  echo -e "or similar, that's confirmation that the node is running and"
+  echo -e "accessible from the Internet."
+  echo -e "Don't worry, connection between the nodes is secure."
+else
+  echo -e "${R}This check found one or more issues!${E}"
+fi
+
+echo
+echo "https://www.othub.info/identity/${ERC725,,}"
+echo
+echo "More about this script: https://befranz.net/otnode/otcheck"
+echo
+
+exit $ERROR
