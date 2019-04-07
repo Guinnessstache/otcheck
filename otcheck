@@ -6,7 +6,7 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.0"
+OTCHECKVER="1.1"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -14,10 +14,12 @@ E="\e[0m"
 ERROR=0
 
 # Docker Container exists and is running?
-if [ "$(docker inspect -f '{{.State.Running}},{{.State.Paused}}' $OTNODE 2>/dev/null)" = "true,false" ]; then
+CONTSTATUS=$(docker inspect -f '{{.State.Running}},{{.State.Paused}}' $OTNODE 2>/dev/null)
+CONTERR=$?
+if [ "$CONTSTATUS" = "true,false" ]; then
   DOCKERSTATUS="${G}$(docker container ls -q --filter=name=$OTNODE --format='{{json .Status}}'|jq -r ".") and running${E}"
 else
-  if [ "$?" = "0" ]; then
+  if [ "$CONTERR" = "0" ]; then
     DOCKERSTATUS="${R}Not running!${E}"
     ((ERROR++))
   else
