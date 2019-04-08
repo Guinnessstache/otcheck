@@ -6,7 +6,7 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.1"
+OTCHECKVER="1.2"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -54,7 +54,7 @@ else
 fi
 
 # Log Files inside Docker
-LOGI=$(docker exec $OTNODE du -m /ot-node/logs|awk '{print $1}')
+LOGI=$(docker exec $OTNODE du -m /ot-node/current/logs|awk '{print $1}')
 if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
   LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
 else
