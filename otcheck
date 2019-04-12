@@ -14,7 +14,7 @@ E="\e[0m"
 ERROR=0
 
 # Compare local version of otcheck with version on Github
-OTCHECKGIT=$(curl -s 'https://raw.githubusercontent.com/befranz/otcheck/master/otcheck'|grep "OTCHECKVER="|cut -d'"' -f2)
+OTCHECKGIT=$(curl -s 'https://raw.githubusercontent.com/befranz/otcheck/master/otcheck'|grep "^OTCHECKVER="|cut -d'"' -f2)
 if [ "$OTCHECKVER" = "$OTCHECKGIT" ]; then
   OTSTATUS="$OTCHECKVER (same as on Github)"
 else
