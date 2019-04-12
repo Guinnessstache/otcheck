@@ -6,12 +6,29 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.3"
+OTCHECKVER="1.4"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
 E="\e[0m"
 ERROR=0
+
+# Compare local version of otcheck with version on Github
+OTCHECKGIT=$(curl -s 'https://raw.githubusercontent.com/befranz/otcheck/master/otcheck'|grep "OTCHECKVER="|cut -d'"' -f2)
+if [ "$OTCHECKVER" = "$OTCHECKGIT" ]; then
+  OTSTATUS="$OTCHECKVER (same as on Github)"
+else
+  OTSTATUS="$OTCHECKVER (${G}$OTCHECKGIT${E} on Github via ${G}otcheck update${E})"
+fi
+
+# Update/download version from Github?
+if [ "${1,,}" = "update" ]; then
+  curl -s 'https://raw.githubusercontent.com/befranz/otcheck/master/otcheck' -o ~/scripts/otcheck
+  echo
+  echo -e "${G}Version $OTCHECKGIT of otcheck was downloaded from Github${E}"
+  echo
+  exit 0
+fi
 
 # Docker Container exists and is running?
 CONTSTATUS=$(docker inspect -f '{{.State.Running}},{{.State.Paused}}' $OTNODE 2>/dev/null)
@@ -64,7 +81,7 @@ else
 fi
 clear
 echo
-echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : v.$OTCHECKVER by befranz.net"
+echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : $OTSTATUS"
 echo
 echo -e "Docker Container Status      : $DOCKERSTATUS"
 echo -e "OT Node Software Version     : $VERSTATUS"
