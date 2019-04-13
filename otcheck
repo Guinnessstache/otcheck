@@ -6,7 +6,7 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.4"
+OTCHECKVER="1.5"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
