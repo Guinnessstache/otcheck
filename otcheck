@@ -6,7 +6,7 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.5"
+OTCHECKVER="1.6"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -46,6 +46,10 @@ else
     exit 1
   fi
 fi
+
+# Houston Password inside Container
+HOUSTONPWD=$(docker exec ${OTNODE} cat /ot-node/data/houston.txt 2>/dev/null||echo "${R}not found!${E}")
+HOUSTONPRT=$(docker port ${OTNODE} 3000|cut -d: -f2)
 
 # Current OT Node Version?
 OTINFO=$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/info' 2>/dev/null)
@@ -169,7 +173,12 @@ else
 fi
 
 echo
-echo "https://www.othub.info/identity/${ERC725,,}"
+echo -e "${BOLD}Houston Login Information${E}"
+echo -e "Node Address : ${OTHOST}"
+echo -e "Port         : ${HOUSTONPRT}"
+echo -e "Password     : ${HOUSTONPWD}"
+echo
+echo "https://www.othub.info/nodes/dataholders/${ERC725,,}"
 echo "https://etherscan.io/address/${OWALLET,,}"
 echo
 echo "More about this script: https://befranz.net/otnode/otcheck"
