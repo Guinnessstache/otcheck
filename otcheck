@@ -6,7 +6,7 @@ MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.6"
+OTCHECKVER="1.7"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -30,11 +30,88 @@ if [ "${1,,}" = "update" ]; then
   exit 0
 fi
 
+clear
+echo
+echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : $OTSTATUS"
+echo
+
 # Docker Container exists and is running?
 CONTSTATUS=$(docker inspect -f '{{.State.Running}},{{.State.Paused}}' $OTNODE 2>/dev/null)
 CONTERR=$?
+
 if [ "$CONTSTATUS" = "true,false" ]; then
   DOCKERSTATUS="${G}$(docker container ls -q --filter=name=$OTNODE --format='{{json .Status}}'|jq -r ".") and running${E}"
+
+  # Houston Password inside Container
+  HOUSTONPWD=$(docker exec ${OTNODE} cat /ot-node/data/houston.txt 2>/dev/null||echo "${R}not found!${E}")
+  HOUSTONPRT=$(docker port ${OTNODE} 3000|cut -d: -f2)
+
+  # Current OT Node Version?
+  OTINFO=$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/info' 2>/dev/null)
+  OTHOST=$(echo "$OTINFO"|jq -r ".network.contact.hostname")
+  OTPORT=$(echo "$OTINFO"|jq -r ".network.contact.port")
+  NODEURL="https://${OTHOST}:${OTPORT}"
+  NODEID=$(echo "$OTINFO"|jq -r ".network.identity")
+  ERC725=$(echo "$OTINFO"|jq -r ".erc_725_identity")
+  OWALLET=$(echo "$OTINFO"|jq -r ".node_wallet")
+  VERSION=$(echo "$OTINFO"|jq -r ".version")
+  VERGITH=$(curl -s 'https://raw.githubusercontent.com/OriginTrail/ot-node/release/mariner/package.json'|jq -r ".version")
+  if [ "$VERSION" = "$VERGITH" ]; then
+    VERSTATUS="${G}$VERSION${E} (same as on Github)"
+  else
+    VERSTATUS="${R}$VERSION${E} (${G}$VERGITH${E} on Github)"
+    ((ERROR++))
+  fi
+
+  # Log Files inside Docker
+  LOGI=$(docker exec $OTNODE du -m /ot-node/current/logs|awk '{print $1}')
+  if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
+    LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
+  else
+    LOGISTATUS="${R}$LOGI${E} (max. $MAXLOG)"
+    ((ERROR++))
+  fi
+
+  # Check Node Online-Status via OT Hub API
+  REMOTESTATUS="$(curl -s "https://api.othub.info/api/nodes/dataholders/checkonline?identity=${ERC725}"|jq ".")"
+  REMOTEMSG=$(echo "$REMOTESTATUS"|jq -r ".Message")
+  REMOTESUC=$(echo "$REMOTESTATUS"|jq -r ".Success")
+  if [ "$REMOTESUC" = "true" ]; then
+    OTHUBMSG="${G}$REMOTEMSG${E}"
+  else
+    OTHUBMSG="${R}$REMOTEMSG${E}"
+    ((ERROR++))
+  fi
+
+  # RPC Link working?
+  OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
+  MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
+  if [ "$MINSTAKE" = "1000" ]; then
+    RPC="${G}YES${E}"
+  else
+    RPC="${R}NO${E}"
+    ((ERROR++))
+  fi
+
+  # Operational Wallet Balance
+  OWB=$(echo "$OTB"|jq -r ".wallet.ethBalance")
+  if (( $(echo "$OWB > $MINETH" | bc -l) )); then
+    OWB="${G}$OWB${E} (min. $MINETH)"
+  else
+    OWB="${R}$OWB${E} (min. $MINETH)"
+    ((ERROR++))
+  fi
+
+  # TRAC reserved and available
+  TRACR=$(echo "$OTB"|jq -r ".profile.reserved")
+  TRACS=$(echo "$OTB"|jq -r ".profile.staked")
+  TRACA=$(echo "$TRACS-$TRACR-$MINSTAKE"|bc -l)
+  if (( $(echo "$TRACA > $MINTRAC" | bc -l) )); then
+    TRACA="${G}$TRACA${E} (min. $MINTRAC)"
+  else
+    TRACA="${R}$TRACA${E}  (min. $MINTRAC)"
+    ((ERROR++))
+  fi
 else
   if [ "$CONTERR" = "0" ]; then
     DOCKERSTATUS="${R}Not running!${E}"
@@ -47,25 +124,6 @@ else
   fi
 fi
 
-# Houston Password inside Container
-HOUSTONPWD=$(docker exec ${OTNODE} cat /ot-node/data/houston.txt 2>/dev/null||echo "${R}not found!${E}")
-HOUSTONPRT=$(docker port ${OTNODE} 3000|cut -d: -f2)
-
-# Current OT Node Version?
-OTINFO=$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/info' 2>/dev/null)
-OTHOST=$(echo "$OTINFO"|jq -r ".network.contact.hostname")
-OTPORT=$(echo "$OTINFO"|jq -r ".network.contact.port")
-ERC725=$(echo "$OTINFO"|jq -r ".erc_725_identity")
-OWALLET=$(echo "$OTINFO"|jq -r ".node_wallet")
-VERSION=$(echo "$OTINFO"|jq -r ".version")
-VERGITH=$(curl -s 'https://raw.githubusercontent.com/OriginTrail/ot-node/release/mariner/package.json'|jq -r ".version")
-if [ "$VERSION" = "$VERGITH" ]; then
-  VERSTATUS="${G}$VERSION${E} (same as on Github)"
-else
-  VERSTATUS="${R}$VERSION${E} (${G}$VERGITH${E} on Github)"
-  ((ERROR++))
-fi
-
 # Log File Size outside Docker
 LOGO=$(du -m "$(docker inspect -f '{{.LogPath}}' $OTNODE 2>/dev/null)" 2>/dev/null|awk '{print $1}')
 if (( $(echo "$LOGO < $MAXLOG" | bc -l) )); then
@@ -75,57 +133,17 @@ else
   ((ERROR++))
 fi
 
-# Log Files inside Docker
-LOGI=$(docker exec $OTNODE du -m /ot-node/current/logs|awk '{print $1}')
-if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
-  LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
-else
-  LOGISTATUS="${R}$LOGI${E} (max. $MAXLOG)"
-  ((ERROR++))
-fi
-clear
-echo
-echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : $OTSTATUS"
-echo
 echo -e "Docker Container Status      : $DOCKERSTATUS"
 echo -e "OT Node Software Version     : $VERSTATUS"
 echo -e "LOG File outside Docker (MB) : $LOGOSTATUS"
 echo -e "LOG Files inside Docker (MB) : $LOGISTATUS"
 echo
+echo -e "Online Check via OT Hub      : $OTHUBMSG"
+echo -e "Manual Check via Web Browser : $NODEURL"
+echo
 echo "---- Local Storage ----"
 df -h --output=size,used,avail,pcent /
 echo
-
-# RPC Link working?
-OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
-MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
-if [ "$MINSTAKE" = "1000" ]; then
-  RPC="${G}YES${E}"
-else
-  RPC="${R}NO${E}"
-  ((ERROR++))
-fi
-
-# Operational Wallet Balance
-OWB=$(echo "$OTB"|jq -r ".wallet.ethBalance")
-if (( $(echo "$OWB > $MINETH" | bc -l) )); then
-  OWB="${G}$OWB${E} (min. $MINETH)"
-else
-  OWB="${R}$OWB${E} (min. $MINETH)"
-  ((ERROR++))
-fi
-
-# TRAC reserved and available
-TRACR=$(echo "$OTB"|jq -r ".profile.reserved")
-TRACS=$(echo "$OTB"|jq -r ".profile.staked")
-TRACA=$(echo "$TRACS-$TRACR-$MINSTAKE"|bc -l)
-if (( $(echo "$TRACA > $MINTRAC" | bc -l) )); then
-  TRACA="${G}$TRACA${E} (min. $MINTRAC)"
-else
-  TRACA="${R}$TRACA${E}  (min. $MINTRAC)"
-  ((ERROR++))
-fi
-
 echo -e "RPC Server URL working       : $RPC"
 echo -e "Operational Wallet (ETH)     : $OWB"
 echo -e "TRAC reserved to Offers      : $TRACR"
@@ -160,26 +178,28 @@ else
 fi
 
 if [ $ERROR = 0 ]; then
-  echo -e "${G}Looks good, as final step call this in your web browser:${E}"
-  echo
-  echo -e "https://${OTHOST}:${OTPORT}"
-  echo
-  echo -e "If you get immediate answer, that the connection is not secure"
-  echo -e "or similar, that's confirmation that the node is running and"
-  echo -e "accessible from the Internet."
-  echo -e "Don't worry, connection between the nodes is secure."
+  echo -e "${G}Great, this check didn't find any issues!${E}"
 else
-  echo -e "${R}This check found one or more issues!${E}"
+  echo -e "${R}This check found one or several issues!${E}"
 fi
 
-echo
-echo -e "${BOLD}Houston Login Information${E}"
-echo -e "Node Address : ${OTHOST}"
-echo -e "Port         : ${HOUSTONPRT}"
-echo -e "Password     : ${HOUSTONPWD}"
-echo
-echo "https://www.othub.info/nodes/dataholders/${ERC725,,}"
-echo "https://etherscan.io/address/${OWALLET,,}"
+if [ ! $VERSION = "" ]; then
+  echo
+  echo -e "${BOLD}Node Settings${E}"
+  echo -e "Node ID            : ${NODEID,,}"
+  echo -e "ERC725 ID          : ${ERC725,,}"
+  echo -e "Operational Wallet : ${OWALLET,,}"
+  echo
+  echo -e "${BOLD}Houston Login${E}"
+  echo -e "Node Address       : ${OTHOST}"
+  echo -e "Port               : ${HOUSTONPRT}"
+  echo -e "Password           : ${HOUSTONPWD}"
+  echo
+  echo "https://www.othub.info/nodes/dataholders/${ERC725,,}"
+  echo
+  echo "https://etherscan.io/address/${OWALLET,,}"
+fi
+
 echo
 echo "More about this script: https://befranz.net/otnode/otcheck"
 echo
