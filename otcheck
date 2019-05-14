@@ -1,17 +1,76 @@
 #!/bin/bash
 
-# Settings
+# Default Settings
 MAXLOG=100
+MAXUSED=80
 MINETH=0.045
 MINTRAC=100
 OTNODE=otnode
 
-OTCHECKVER="1.7"
+# Read Optional Custom Settings
+SCRIPT=$(basename "$0")
+USRCFG=/root/scripts/${SCRIPT}.cfg
+if [ -f "$USRCFG" ]; then
+   source "$USRCFG"
+fi
+
+# Read Email Settings
+EMAILCFG=/root/email.cfg
+if [ -f "$EMAILCFG" ]; then
+   source "$EMAILCFG"
+   EMAIL=1
+else
+   EMAIL=0
+fi
+
+OTCHECKVER="1.8"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
 E="\e[0m"
+NL=$'\n'
+DEL=";"
 ERROR=0
+ERRORMSG=""
+LINK="${NL}${NL}Script details: https://befranz.net/otnode/otcheck/${NL}"
+
+# Send E-Mail if * /root/email.cfg exists
+#                * script runs via cron
+#                * check result is different to the previous run
+function sendmessage {
+   if [ "$EMAIL" = "1" ]; then
+      if [ "$VIACRON" = "1" ]; then
+         if [ -f /root/${SCRIPT}.msg ]; then
+            OLDERRORMSG=$(</root/${SCRIPT}.msg)
+         else
+            OLDERRORMSG=""
+         fi
+         if [ "$ERROR" = "0" ]; then
+           SUBJECT="${SCRIPT^^} ($(hostname)) - Everything OK with ${OTNODE}!"
+         else
+           SUBJECT="${SCRIPT^^} ($(hostname)) - Issues with ${OTNODE}!"
+         fi
+         if [ ! "$OLDERRORMSG" = "$ERRORMSG" ]; then
+            echo -e "${ERRORMSG}" >/root/${SCRIPT}.msg
+            ERRORMSG=${ERRORMSG//;/${NL}}
+            curl -s "smtp://${MAILSERVER}:${MAILPORT}" --ssl-reqd --mail-from "${MAILFROM}"\
+                 --mail-rcpt "${MAILTO}" --user "${MAILUSER}:${MAILPASSWORD}"\
+                 -T <(echo -e "Subject: ${SUBJECT}\n\n ${ERRORMSG}${LINK}");
+         fi
+      else
+         echo -e "${ERRORMSG}" >/root/${SCRIPT}.msg
+      fi
+   fi
+}
+
+# Running via Cron?
+if [ -t 1 ] ; then
+    VIACRON=0
+else
+    VIACRON=1
+    # Add random delay max. 10 sec.
+    sleep $(( (RANDOM % 10) + 1 ))s
+fi
 
 # Compare local version of otcheck with version on Github
 OTCHECKGIT=$(curl -s 'https://raw.githubusercontent.com/befranz/otcheck/master/otcheck'|grep "^OTCHECKVER="|cut -d'"' -f2)
@@ -30,7 +89,36 @@ if [ "${1,,}" = "update" ]; then
   exit 0
 fi
 
-clear
+# Check if email configuration is working
+if [ "${1,,}" = "emailcheck" ]; then
+  if [ "$MAILSERVER" = "" ]; then
+    echo
+    echo -e "${R}Check Email configuration file /root/email.cfg!${E}"
+    echo
+    exit 1
+  else
+    curl -s "smtp://${MAILSERVER}:${MAILPORT}" --ssl-reqd --mail-from "${MAILFROM}"\
+         --mail-rcpt "${MAILTO}" --user "${MAILUSER}:${MAILPASSWORD}"\
+         -T <(echo -e "Subject: OTCheck ($(hostname)) - Email Check\n\n OK!");
+    RC="$?"
+    if [ "$RC" = "0" ]; then
+       echo
+       echo -e "${G}Sending Email to ${MAILTO} seems to be ok! Check the Mailbox.${E}"
+       echo
+       exit 0
+    else
+       echo
+       echo -e "${R}Email Check failed: Error Code $RC!${E}"
+       echo
+       echo -e "Find details here: https://ec.haxx.se/usingcurl-returns.html"
+       echo
+       exit $RC
+    fi
+  fi
+fi
+
+# Clear screen and show Header
+tput reset
 echo
 echo -e "${BOLD}OT Node Check ($OTNODE)${E}       : $OTSTATUS"
 echo
@@ -48,80 +136,114 @@ if [ "$CONTSTATUS" = "true,false" ]; then
 
   # Current OT Node Version?
   OTINFO=$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/info' 2>/dev/null)
-  OTHOST=$(echo "$OTINFO"|jq -r ".network.contact.hostname")
-  OTPORT=$(echo "$OTINFO"|jq -r ".network.contact.port")
-  NODEURL="https://${OTHOST}:${OTPORT}"
-  NODEID=$(echo "$OTINFO"|jq -r ".network.identity")
-  ERC725=$(echo "$OTINFO"|jq -r ".erc_725_identity")
-  OWALLET=$(echo "$OTINFO"|jq -r ".node_wallet")
-  VERSION=$(echo "$OTINFO"|jq -r ".version")
-  VERGITH=$(curl -s 'https://raw.githubusercontent.com/OriginTrail/ot-node/release/mariner/package.json'|jq -r ".version")
-  if [ "$VERSION" = "$VERGITH" ]; then
-    VERSTATUS="${G}$VERSION${E} (same as on Github)"
-  else
-    VERSTATUS="${R}$VERSION${E} (${G}$VERGITH${E} on Github)"
-    ((ERROR++))
-  fi
+  # OT Node running properly?
+  if [ ! "$OTINFO" = "" ]; then
+      OTHOST=$(echo "$OTINFO"|jq -r ".network.contact.hostname")
+      OTPORT=$(echo "$OTINFO"|jq -r ".network.contact.port")
+      NODEURL="https://${OTHOST}:${OTPORT}"
+      NODEID=$(echo "$OTINFO"|jq -r ".network.identity")
+      ERC725=$(echo "$OTINFO"|jq -r ".erc_725_identity")
+      OWALLET=$(echo "$OTINFO"|jq -r ".node_wallet")
+      VERSION=$(echo "$OTINFO"|jq -r ".version")
+      VERGITH=$(curl -s 'https://raw.githubusercontent.com/OriginTrail/ot-node/release/mariner/package.json'|jq -r ".version")
+      if [ "$VERSION" = "$VERGITH" ]; then
+        VERSTATUS="${G}$VERSION${E} (same as on Github)"
+      else
+        VERSTATUS="${R}$VERSION${E} (${G}$VERGITH${E} on Github)"
+        ERRORMSG="${ERRORMSG}OT Node software: $VERSION ($VERGITH on Github)${DEL}"
+        ((ERROR++))
+      fi
 
-  # Log Files inside Docker
-  LOGI=$(docker exec $OTNODE du -m /ot-node/current/logs|awk '{print $1}')
-  if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
-    LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
-  else
-    LOGISTATUS="${R}$LOGI${E} (max. $MAXLOG)"
-    ((ERROR++))
-  fi
+      # Log Files inside Docker
+      LOGI=$(docker exec $OTNODE du -m /ot-node/current/logs|awk '{print $1}')
+      if (( $(echo "$LOGI < $MAXLOG" | bc -l) )); then
+        LOGISTATUS="${G}$LOGI${E} (max. $MAXLOG)"
+      else
+        LOGISTATUS="${R}$LOGI${E} (max. $MAXLOG)"
+        ERRORMSG="${ERRORMSG}Log inside Docker: ${LOGI}MB (max. $MAXLOG)${DEL}"
+        ((ERROR++))
+      fi
 
-  # Check Node Online-Status via OT Hub API
-  REMOTESTATUS="$(curl -s "https://api.othub.info/api/nodes/dataholders/checkonline?identity=${ERC725}"|jq ".")"
-  REMOTEMSG=$(echo "$REMOTESTATUS"|jq -r ".Message")
-  REMOTESUC=$(echo "$REMOTESTATUS"|jq -r ".Success")
-  if [ "$REMOTESUC" = "true" ]; then
-    OTHUBMSG="${G}$REMOTEMSG${E}"
-  else
-    OTHUBMSG="${R}$REMOTEMSG${E}"
-    ((ERROR++))
-  fi
+      # Check Node Online-Status via befranz API
+      REMOTESTATUS=$(curl -s -A "OTCheck/${OTCHECKVER} ($(lsb_release -s -d))" "https://hb.befranz.net/api/v1/checkme?host=${OTHOST}&port=${OTPORT}")
+      REMOTEMSG=$(echo "$REMOTESTATUS"|cut -d ";" -f 2)
+      REMOTESUC=$(echo "$REMOTESTATUS"|cut -d ";" -f 1)
+      if [ "$REMOTESUC" = "true" ]; then
+        OTHUBMSG="${G}$REMOTEMSG${E}"
+      else
+        if [ "${REMOTEMSG}" = "" ]; then
+           # Check Node Online-Status via OTHub API
+           REMOTESTATUS="$(curl -s "https://api.othub.info/api/nodes/dataholders/checkonline?identity=${ERC725}"|jq ".")"
+           REMOTEMSG=$(echo "$REMOTESTATUS"|jq -r ".Message")
+           REMOTESUC=$(echo "$REMOTESTATUS"|jq -r ".Success")
+           if [ "$REMOTESUC" = "true" ]; then
+              OTHUBMSG="${G}$REMOTEMSG${E}"
+           else
+              OTHUBMSG="${R}$REMOTEMSG${E}"
+              ERRORMSG="${ERRORMSG}Online Check: $REMOTEMSG${DEL}"
+              ((ERROR++))
+           fi
+        else
+           OTHUBMSG="${R}$REMOTEMSG${E}"
+           ERRORMSG="${ERRORMSG}Online Check: $REMOTEMSG${DEL}"
+           ((ERROR++))
+        fi
+      fi
 
-  # RPC Link working?
-  OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
-  MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
-  if [ "$MINSTAKE" = "1000" ]; then
-    RPC="${G}YES${E}"
-  else
-    RPC="${R}NO${E}"
-    ((ERROR++))
-  fi
+      # RPC Link working?
+      OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
+      MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
+      if [ "$MINSTAKE" = "1000" ]; then
+        RPC="${G}YES${E}"
+      else
+        RPC="${R}NO${E}"
+        ERRORMSG="${ERRORMSG}RPC Server URL working: NO${DEL}"
+        ((ERROR++))
+      fi
 
-  # Operational Wallet Balance
-  OWB=$(echo "$OTB"|jq -r ".wallet.ethBalance")
-  if (( $(echo "$OWB > $MINETH" | bc -l) )); then
-    OWB="${G}$OWB${E} (min. $MINETH)"
-  else
-    OWB="${R}$OWB${E} (min. $MINETH)"
-    ((ERROR++))
-  fi
+      # Operational Wallet Balance
+      OWB=$(echo "$OTB"|jq -r ".wallet.ethBalance")
+      if (( $(echo "$OWB > $MINETH" | bc -l) )); then
+        OWBSTATUS="${G}$OWB${E} (min. $MINETH)"
+      else
+        OWBSTATUS="${R}$OWB${E} (min. $MINETH)"
+        ERRORMSG="${ERRORMSG}Operational Wallet (ETH): $OWB (min. $MINETH)${DEL}"
+        ((ERROR++))
+      fi
 
-  # TRAC reserved and available
-  TRACR=$(echo "$OTB"|jq -r ".profile.reserved")
-  TRACS=$(echo "$OTB"|jq -r ".profile.staked")
-  TRACA=$(echo "$TRACS-$TRACR-$MINSTAKE"|bc -l)
-  if (( $(echo "$TRACA > $MINTRAC" | bc -l) )); then
-    TRACA="${G}$TRACA${E} (min. $MINTRAC)"
+      # TRAC reserved and available
+      TRACR=$(echo "$OTB"|jq -r ".profile.reserved")
+      TRACS=$(echo "$OTB"|jq -r ".profile.staked")
+      TRACA=$(echo "$TRACS-$TRACR-$MINSTAKE"|bc -l)
+      if (( $(echo "$TRACA > $MINTRAC" | bc -l) )); then
+        TRACASTATUS="${G}$TRACA${E} (min. $MINTRAC)"
+      else
+        TRACASTATUS="${R}$TRACA${E}  (min. $MINTRAC)"
+        ERRORMSG="${ERRORMSG}TRAC available for Offers: $TRACA  (min. $MINTRAC)${DEL}"
+        ((ERROR++))
+      fi
   else
-    TRACA="${R}$TRACA${E}  (min. $MINTRAC)"
-    ((ERROR++))
+      echo
+      echo -e "${R}OT Node ($OTNODE) not started (yet)! See last 3 lines of the Log.${E}"
+      echo
+      ERRORMSG="${ERRORMSG}OT Node ($OTNODE) not started (yet)!${DEL}"
+      docker logs --tail 3 $OTNODE
+      echo
+      sendmessage
+      exit 1
   fi
 else
+  echo
   if [ "$CONTERR" = "0" ]; then
-    DOCKERSTATUS="${R}Not running!${E}"
-    ((ERROR++))
+    echo -e "${R}Docker Container $OTNODE does not run!${E}"
+    ERRORMSG="${ERRORMSG}Docker Container $OTNODE does not run!${DEL}"
   else
-    echo
     echo -e "${R}Docker Container $OTNODE does not exist!${E}"
-    echo
-    exit 1
+    ERRORMSG="${ERRORMSG}Docker Container $OTNODE does not exist!${DEL}"
   fi
+  echo
+  sendmessage
+  exit 1
 fi
 
 # Log File Size outside Docker
@@ -130,6 +252,17 @@ if (( $(echo "$LOGO < $MAXLOG" | bc -l) )); then
   LOGOSTATUS="${G}$LOGO${E} (max. $MAXLOG)"
 else
   LOGOSTATUS="${R}$LOGO${E} (max. $MAXLOG)"
+  ERRORMSG="${ERRORMSG}Log outside Docker: ${LOGO}MB (max. $MAXLOG)${DEL}"
+  ((ERROR++))
+fi
+
+# Local Storage
+STORAGE=$(df "$HOME" | awk 'NR==2 { print $5 }'|sed "s/%//")
+if (( $(echo "$STORAGE < $MAXUSED" | bc -l) )); then
+  STORAGESTATUS="${G}$STORAGE${E} (max. $MAXUSED)"
+else
+  STORAGESTATUS="${R}$STORAGE${E} (max. $MAXUSED)"
+  ERRORMSG="${ERRORMSG}Local Storage: ${STORAGE}% (max. $MAXUSED)${DEL}"
   ((ERROR++))
 fi
 
@@ -138,52 +271,54 @@ echo -e "OT Node Software Version     : $VERSTATUS"
 echo -e "LOG File outside Docker (MB) : $LOGOSTATUS"
 echo -e "LOG Files inside Docker (MB) : $LOGISTATUS"
 echo
-echo -e "Online Check via OT Hub      : $OTHUBMSG"
+echo -e "Local Storage used in %      : $STORAGESTATUS"
+echo
+echo -e "Online Check via Remote API  : $OTHUBMSG"
 echo -e "Manual Check via Web Browser : $NODEURL"
 echo
-echo "---- Local Storage ----"
-df -h --output=size,used,avail,pcent /
-echo
 echo -e "RPC Server URL working       : $RPC"
-echo -e "Operational Wallet (ETH)     : $OWB"
+echo -e "Operational Wallet (ETH)     : $OWBSTATUS"
 echo -e "TRAC reserved to Offers      : $TRACR"
-echo -e "TRAC available for Offers    : $TRACA"
+echo -e "TRAC available for Offers    : $TRACASTATUS"
 echo
-printf "Operating System Status      : "
 
-# Find upgradable components
-apt update -qqq
-APTUPG=$(apt list --upgradable -qq 2>/dev/null|wc -l)
-UPGDOCKER=$(apt list --upgradable -qq 2>/dev/null|grep -c -i "docker")
+# OS Status Check runs in interactive mode only
+if [ $VIACRON = 0 ]; then
+    printf "Operating System Status      : "
+    # Find upgradable components
+    apt update -qqq
+    APTUPG=$(apt list --upgradable -qq 2>/dev/null|wc -l)
+    UPGDOCKER=$(apt list --upgradable -qq 2>/dev/null|grep -c -i "docker")
 
-# Check reboot file
-if [ -e /var/run/reboot-required.pkgs ]; then
-  REBOOT="(${R}after Reboot${E})"
-else
-  REBOOT=""
+    # Check reboot file
+    if [ -f /var/run/reboot-required.pkgs ]; then
+      REBOOT="(${R}after Reboot${E})"
+    else
+      REBOOT=""
+    fi
+
+    # Show how many upgradable components and if Docker is part of
+    if [ ! "$APTUPG" = "0" ]; then
+      echo -e "${R}$APTUPG Upgrade(s)${E} by ${BOLD}apt upgrade -y${E}"
+      echo
+      if [ ! "$UPGDOCKER" = "0" ]; then
+        echo -e "${R}Docker components are part of the upgrade.${E} To avoid issues"
+        echo -e "stop OT Node by ${BOLD}docker stop $OTNODE${E} before the upgrade."
+        echo
+      fi
+    else
+      echo -e "${G}up-to-date${E} ${REBOOT}"
+      echo
+    fi
 fi
 
-# Show how many upgradable components and if Docker is part of
-if [ ! "$APTUPG" = "0" ]; then
-  echo -e "${R}$APTUPG Upgrade(s)${E} by ${BOLD}apt upgrade -y${E}"
-  echo
-  if [ ! "$UPGDOCKER" = "0" ]; then
-    echo -e "${R}Docker components are part of the upgrade.${E} To avoid issues"
-    echo -e "stop OT Node by ${BOLD}docker stop $OTNODE${E} before the upgrade."
-    echo
-  fi
-else
-  echo -e "${G}up-to-date${E} ${REBOOT}"
-  echo
-fi
-
-if [ $ERROR = 0 ]; then
+if [ "$ERROR" = "0" ]; then
   echo -e "${G}Great, this check didn't find any issues!${E}"
 else
   echo -e "${R}This check found one or several issues!${E}"
 fi
 
-if [ ! $VERSION = "" ]; then
+if [ ! "$VERSION" = "" ]; then
   echo
   echo -e "${BOLD}Node Settings${E}"
   echo -e "Node ID            : ${NODEID,,}"
@@ -203,5 +338,5 @@ fi
 echo
 echo "More about this script: https://befranz.net/otnode/otcheck"
 echo
-
+sendmessage
 exit $ERROR
