@@ -23,7 +23,7 @@ else
    EMAIL=0
 fi
 
-OTCHECKVER="1.8"
+OTCHECKVER="1.9"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -164,32 +164,6 @@ if [ "$CONTSTATUS" = "true,false" ]; then
         ((ERROR++))
       fi
 
-      # Check Node Online-Status via befranz API
-      REMOTESTATUS=$(curl -s -A "OTCheck/${OTCHECKVER} ($(lsb_release -s -d))" "https://hb.befranz.net/api/v1/checkme?host=${OTHOST}&port=${OTPORT}")
-      REMOTEMSG=$(echo "$REMOTESTATUS"|cut -d ";" -f 2)
-      REMOTESUC=$(echo "$REMOTESTATUS"|cut -d ";" -f 1)
-      if [ "$REMOTESUC" = "true" ]; then
-        OTHUBMSG="${G}$REMOTEMSG${E}"
-      else
-        if [ "${REMOTEMSG}" = "" ]; then
-           # Check Node Online-Status via OTHub API
-           REMOTESTATUS="$(curl -s "https://api.othub.info/api/nodes/dataholders/checkonline?identity=${ERC725}"|jq ".")"
-           REMOTEMSG=$(echo "$REMOTESTATUS"|jq -r ".Message")
-           REMOTESUC=$(echo "$REMOTESTATUS"|jq -r ".Success")
-           if [ "$REMOTESUC" = "true" ]; then
-              OTHUBMSG="${G}$REMOTEMSG${E}"
-           else
-              OTHUBMSG="${R}$REMOTEMSG${E}"
-              ERRORMSG="${ERRORMSG}Online Check: $REMOTEMSG${DEL}"
-              ((ERROR++))
-           fi
-        else
-           OTHUBMSG="${R}$REMOTEMSG${E}"
-           ERRORMSG="${ERRORMSG}Online Check: $REMOTEMSG${DEL}"
-           ((ERROR++))
-        fi
-      fi
-
       # RPC Link working?
       OTB="$(docker exec $OTNODE curl -s 'http://127.0.0.1:8900/api/balance?humanReadable=true' 2>/dev/null)"
       MINSTAKE=$(echo "$OTB"|jq -r ".profile.minimalStake")
@@ -273,7 +247,6 @@ echo -e "LOG Files inside Docker (MB) : $LOGISTATUS"
 echo
 echo -e "Local Storage used in %      : $STORAGESTATUS"
 echo
-echo -e "Online Check via Remote API  : $OTHUBMSG"
 echo -e "Manual Check via Web Browser : $NODEURL"
 echo
 echo -e "RPC Server URL working       : $RPC"
