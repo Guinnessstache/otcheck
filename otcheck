@@ -23,7 +23,7 @@ else
    EMAIL=0
 fi
 
-OTCHECKVER="1.9"
+OTCHECKVER="EOL"
 BOLD="\e[1m"
 G="\e[32m"
 R="\e[31m"
@@ -33,6 +33,15 @@ DEL=";"
 ERROR=0
 ERRORMSG=""
 LINK="${NL}${NL}Script details: https://befranz.net/otnode/otcheck/${NL}"
+
+echo
+echo -e "${R}OTCheck reached end of life and won't be updated for OT Node v.4.0.0${E}"
+echo
+echo "You can remove this script + config file by these commands:"
+echo "rm -f $0 $USRCFG"
+echo
+
+exit
 
 # Send E-Mail if * /root/email.cfg exists
 #                * script runs via cron
