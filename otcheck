@@ -37,7 +37,7 @@ LINK="${NL}${NL}Script details: https://befranz.net/otnode/otcheck/${NL}"
 echo
 echo -e "${R}OTCheck reached end of life and won't be updated for OT Node v.4.0.0${E}"
 echo
-echo "You can remove this script + config file by these commands:"
+echo "You can remove this script + config file by this command:"
 echo "rm -f $0 $USRCFG"
 echo
 
